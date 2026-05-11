@@ -1,8 +1,10 @@
-# 树洞情绪陪伴 Agent
+<img width="2556" height="1253" alt="image" src="https://github.com/user-attachments/assets/fcef0619-5e94-4ff5-b741-e3c7ebf84180" /># 树洞情绪陪伴 Agent
 
 一个面向情绪陪伴、长期记忆和心情复盘场景的 AI 应用。项目支持多会话聊天、三种陪伴人设、SSE 流式回复、短期/中期/长期记忆、基于 ChromaDB 的语义记忆检索、每日心情总结、心情日历、天气建议和热点话题入口。
 
 > 说明：本项目不是简单的 LLM 聊天壳，而是围绕“情绪陪伴”这个具体场景，实现了前端交互、后端接口、消息持久化、Agent 编排、RAG 长期记忆、心情分析和第三方工具接入的完整链路。
+
+
 
 ## 功能特性
 
@@ -48,58 +50,6 @@
 | fetch + ReadableStream | 消费 SSE 流式聊天接口 |
 | marked | 渲染 AI 回复中的 Markdown 内容 |
 
-## 项目结构
-
-```text
-emotion_companion/
-├── backend/
-│   ├── run.py
-│   ├── emotion.db
-│   ├── chroma_db/
-│   └── app/
-│       ├── api/
-│       │   ├── main.py
-│       │   └── routes/
-│       │       ├── chat.py
-│       │       ├── memory.py
-│       │       ├── mood.py
-│       │       ├── news.py
-│       │       └── weather.py
-│       ├── agents/
-│       │   └── companion_agent.py
-│       ├── models/
-│       │   ├── db_models.py
-│       │   └── schemas.py
-│       ├── services/
-│       │   ├── amap_service.py
-│       │   ├── llm_service.py
-│       │   ├── memory_service.py
-│       │   ├── news_service.py
-│       │   ├── rag_service.py
-│       │   ├── summary_service.py
-│       │   └── weather_service.py
-│       ├── config.py
-│       └── database.py
-├── frontend/
-│   ├── package.json
-│   ├── vite.config.ts
-│   └── src/
-│       ├── App.vue
-│       ├── main.ts
-│       ├── services/api.ts
-│       ├── stores/appStore.ts
-│       ├── types/index.ts
-│       ├── views/
-│       │   ├── ChatView.vue
-│       │   └── MoodBoard.vue
-│       └── components/
-│           ├── ConversationSidebar.vue
-│           ├── HotTopicCard.vue
-│           ├── MessageBubble.vue
-│           ├── MoodPanel.vue
-│           └── WeatherWidget.vue
-└── README.md
-```
 
 ## 核心数据流
 
