@@ -4,6 +4,8 @@
 
 > 说明：本项目不是简单的 LLM 聊天壳，而是围绕“情绪陪伴”这个具体场景，实现了前端交互、后端接口、消息持久化、Agent 编排、RAG 长期记忆、心情分析和第三方工具接入的完整链路。
 <img width="255" height="125" alt="image" src="https://github.com/user-attachments/assets/fcef0619-5e94-4ff5-b741-e3c7ebf84180" />
+<img width="255" height="125" alt="image" src="https://github.com/user-attachments/assets/35457583-e79d-4012-ab15-d627906a5aab" />
+
 
 
 ## 功能特性
