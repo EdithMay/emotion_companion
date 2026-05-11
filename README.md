@@ -1,9 +1,9 @@
-<img width="2556" height="1253" alt="image" src="https://github.com/user-attachments/assets/fcef0619-5e94-4ff5-b741-e3c7ebf84180" /># 树洞情绪陪伴 Agent
+# 树洞情绪陪伴 Agent
 
 一个面向情绪陪伴、长期记忆和心情复盘场景的 AI 应用。项目支持多会话聊天、三种陪伴人设、SSE 流式回复、短期/中期/长期记忆、基于 ChromaDB 的语义记忆检索、每日心情总结、心情日历、天气建议和热点话题入口。
 
 > 说明：本项目不是简单的 LLM 聊天壳，而是围绕“情绪陪伴”这个具体场景，实现了前端交互、后端接口、消息持久化、Agent 编排、RAG 长期记忆、心情分析和第三方工具接入的完整链路。
-
+<img width="255" height="125" alt="image" src="https://github.com/user-attachments/assets/fcef0619-5e94-4ff5-b741-e3c7ebf84180" />
 
 
 ## 功能特性
