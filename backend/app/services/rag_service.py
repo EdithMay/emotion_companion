@@ -66,7 +66,7 @@ class RAGService:
         import dashscope
         from ..config import get_settings
         settings = get_settings()
-        dashscope.api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+        dashscope.api_key = os.getenv("ALY_API_KEY")
         self.dashscope = dashscope
         print("   向量化模型：text-embedding-v4（阿里云 API）")
 
@@ -179,7 +179,7 @@ class RAGService:
                 similarity = 1 - dist   # 转换为相似度分数（0-1）
 
                 # 过滤相似度过低的结果（低于 0.3 的基本不相关）
-                if similarity < 0.6:
+                if similarity < 0.5:
                     continue
 
                 rag_results.append(RAGResult(

@@ -5,9 +5,9 @@ from sqlalchemy.orm import Session
 from ...database import get_db
 from ...models.schemas import (
     ConversationCreate, ConversationOut,
-    MessageCreate, ChatResponse, MessageOut
+    MessageCreate, ChatResponse, MessageOut, MessageImageOut
 )
-from ...models.db_models import Conversation, Message
+from ...models.db_models import Conversation, Message, MessageImage
 from ...agents.companion_agent import get_companion_agent
 
 router = APIRouter(prefix="/chat", tags=["对话"])
@@ -101,7 +101,48 @@ def get_messages(
         .order_by(Message.created_at.asc())
         .all()
     )
-    return messages
+    image_by_message_id = {
+        image.message_id: image
+        for image in db.query(MessageImage)
+        .filter(MessageImage.message_id.in_([message.id for message in messages]))
+        .all()
+    } if messages else {}
+
+    return [
+        MessageOut(
+            id=message.id,
+            conversation_id=message.conversation_id,
+            role=message.role,
+            content=message.content,
+            created_at=message.created_at,
+            image_url=image_by_message_id[message.id].public_url if message.id in image_by_message_id else None,
+            image_created_at=image_by_message_id[message.id].created_at if message.id in image_by_message_id else None,
+        )
+        for message in messages
+    ]
+
+
+@router.get(
+    "/images",
+    response_model=list[MessageImageOut],
+    summary="获取用户发送过的全部图片"
+)
+def get_message_images(db: Session = Depends(get_db)):
+    images = (
+        db.query(MessageImage)
+        .order_by(MessageImage.created_at.desc())
+        .all()
+    )
+    return [
+        MessageImageOut(
+            id=image.id,
+            conversation_id=image.conversation_id,
+            message_id=image.message_id,
+            url=image.public_url,
+            created_at=image.created_at,
+        )
+        for image in images
+    ]
 
 # ── 核心对话接口 ──────────────────────────────────────────────
 
@@ -126,7 +167,7 @@ def send_message(
 
     try:
         agent    = get_companion_agent()
-        response = agent.chat(db, body.conversation_id, body.content)
+        response = agent.chat(db, body.conversation_id, body.content, body.image_data_url)
         return response
     except Exception as e:
         print(f"❌ Agent 对话失败: {e}")
@@ -160,7 +201,7 @@ def send_message_stream(
 
         def event_stream():
             yield "data: [START]\n\n"
-            yield from agent.stream_chat(db, body.conversation_id, body.content)
+            yield from agent.stream_chat(db, body.conversation_id, body.content, body.image_data_url)
 
         return StreamingResponse(
             event_stream(),

@@ -38,8 +38,9 @@ class ConversationOut(BaseModel):
 
 class MessageCreate(BaseModel):
     """发送消息请求体"""
-    conversation_id: int  = Field(..., description="所属会话 ID")
-    content:         str  = Field(..., description="用户消息内容")
+    conversation_id: int           = Field(..., description="所属会话 ID")
+    content:         str           = Field(..., description="用户消息内容")
+    image_data_url:  Optional[str] = Field(default=None, description="可选图片 data URL")
 
 
 class MessageOut(BaseModel):
@@ -49,6 +50,8 @@ class MessageOut(BaseModel):
     role:            str      # "user" 或 "assistant"
     content:         str
     created_at:      datetime
+    image_url:       Optional[str] = None
+    image_created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 
@@ -176,6 +179,17 @@ class NewsResponse(BaseModel):
     success: bool
     message: str = Field(default="")
     data:    List[NewsItem] = Field(default=[])
+
+
+class MessageImageOut(BaseModel):
+    """用户发送过的图片"""
+    id: int
+    conversation_id: int
+    message_id: int
+    url: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 # ═══════════════════════════════════════════════

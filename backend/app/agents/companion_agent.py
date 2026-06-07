@@ -12,6 +12,7 @@ from ..services.memory_service import (
     get_latest_summary,
     check_and_compress
 )
+from ..services.image_service import save_message_image
 from ..services.rag_service import get_rag_service
 from ..models.db_models import MoodEntry, PersonaConfig, Conversation
 from ..models.schemas import MessageOut, ChatResponse
@@ -19,7 +20,6 @@ from ..models.schemas import MessageOut, ChatResponse
 # ═══════════════════════════════════════════════════════════════
 # 工具描述：注入 system prompt，让 Agent 知道有这个能力
 # ═══════════════════════════════════════════════════════════════
-
 MEMORY_TOOL_DESC = """
 你拥有一个记忆检索工具，可以在真正需要时主动调用：
 
@@ -85,7 +85,8 @@ class CompanionAgent:
         self,
         db: Session,
         conversation_id: int,
-        user_content: str
+        user_content: str,
+        image_data_url: str | None = None,
     ):
         """
         流式对话，使用 Generator yield SSE 格式数据。
@@ -102,16 +103,18 @@ class CompanionAgent:
 
         # ── 步骤 1：保存用户消息 ─────────────────────────────
         try:
-            user_msg = save_message(db, conversation_id, "user", user_content)
+            stored_user_content = self._stored_user_content(user_content, image_data_url)
+            user_msg = save_message(db, conversation_id, "user", stored_user_content)
+            image_record = self._save_image_if_present(db, conversation_id, user_msg.id, image_data_url)
         except Exception as e:
             yield f"data: [ERROR]保存消息失败: {e}\n\n"
             return
 
-        yield (
-            f"data: [USER_MSG]"
-            f"{json.dumps({'id': user_msg.id, 'created_at': str(user_msg.created_at)}, ensure_ascii=False)}"
-            f"\n\n"
-        )
+        user_meta = {'id': user_msg.id, 'created_at': str(user_msg.created_at)}
+        if image_record:
+            user_meta["image_url"] = image_record.public_url
+            user_meta["image_created_at"] = str(image_record.created_at)
+        yield f"data: [USER_MSG]{json.dumps(user_meta, ensure_ascii=False)}\n\n"
 
         # ── 步骤 2：检查记忆压缩 ─────────────────────────────
         try:
@@ -131,7 +134,7 @@ class CompanionAgent:
             print(f"  ⚠️  记忆压缩失败（不影响对话）: {e}")
 
         # ── 步骤 3：构建 Prompt ──────────────────────────────
-        messages = self._build_prompt(db, conversation_id, user_content)
+        messages = self._build_prompt(db, conversation_id, user_content, image_data_url)
 
         # ── 步骤 4：第一次 LLM 调用（非流式，检测工具调用）──
         print(f"\n💬 [会话{conversation_id}] 第一次 LLM 调用，检测工具意图...")
@@ -215,10 +218,12 @@ class CompanionAgent:
         self,
         db: Session,
         conversation_id: int,
-        user_content: str
+        user_content: str,
+        image_data_url: str | None = None,
     ) -> ChatResponse:
         """非流式版本，逻辑与 stream_chat 一致，供测试使用。"""
-        user_msg   = save_message(db, conversation_id, "user", user_content)
+        user_msg   = save_message(db, conversation_id, "user", self._stored_user_content(user_content, image_data_url))
+        image_record = self._save_image_if_present(db, conversation_id, user_msg.id, image_data_url)
         compressed = check_and_compress(db, conversation_id)
         if compressed:
             summary_text = get_latest_summary(db, conversation_id)
@@ -232,16 +237,16 @@ class CompanionAgent:
                     }
                 )
 
-        messages      = self._build_prompt(db, conversation_id, user_content)
+        messages      = self._build_prompt(db, conversation_id, user_content, image_data_url)
         first_response = self._invoke_llm_sync(messages)
-        tool_query    = self._parse_tool_call(first_response)
+        tool_call    = self._parse_tool_call(first_response)
 
-        if tool_query is not None:
-            tool_result = self._execute_search_memory(tool_query)
+        if tool_call is not None:
+            tool_result = self._execute_tool_call(tool_call)
             messages.append({"role": "assistant", "content": first_response})
             messages.append({
                 "role": "user",
-                "content": f"[工具返回结果]\n{tool_result}\n\n请基于以上背景自然地回复用户。"
+                "content": self._tool_followup_prompt(tool_call, tool_result)
             })
             reply_text = self._invoke_llm_sync(messages)
         else:
@@ -267,14 +272,16 @@ class CompanionAgent:
                 conversation_id=user_msg.conversation_id,
                 role=user_msg.role,
                 content=user_msg.content,
-                created_at=user_msg.created_at
+                created_at=user_msg.created_at,
+                image_url=image_record.public_url if image_record else None,
+                image_created_at=image_record.created_at if image_record else None,
             ),
             reply=MessageOut(
                 id=agent_msg.id,
                 conversation_id=agent_msg.conversation_id,
                 role=agent_msg.role,
                 content=agent_msg.content,
-                created_at=agent_msg.created_at
+                created_at=agent_msg.created_at,
             )
         )
 
@@ -286,7 +293,8 @@ class CompanionAgent:
         self,
         db: Session,
         conversation_id: int,
-        user_content: str
+        user_content: str,
+        image_data_url: str | None = None,
     ) -> list[dict]:
         """
         构建三层 Prompt（移除了自动 RAG 注入）：
@@ -321,28 +329,67 @@ class CompanionAgent:
         messages.extend(recent)
 
         # 如果 recent 不包含刚存入的用户消息，手动追加
-        if not recent or recent[-1]["content"] != user_content:
-            messages.append({"role": "user", "content": user_content})
+        current_user_message = self._current_user_message(user_content, image_data_url)
+        if image_data_url or not recent or recent[-1]["content"] != user_content:
+            messages.append(current_user_message)
 
         return messages
+
+    def _stored_user_content(self, user_content: str, image_data_url: str | None = None) -> str:
+        """Store a lightweight marker instead of base64 image data."""
+        content = user_content.strip()
+        if image_data_url:
+            return f"{content} [图片]" if content else "[图片]"
+        return content
+
+    def _current_user_message(self, user_content: str, image_data_url: str | None = None) -> dict:
+        """Build OpenAI-compatible text + image content for the current turn."""
+        if not image_data_url:
+            return {"role": "user", "content": user_content}
+
+        text = user_content.strip() or "请看看这张图片。"
+        return {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": text},
+                {"type": "image_url", "image_url": {"url": image_data_url}},
+            ],
+        }
+
+    def _save_image_if_present(self, db: Session, conversation_id: int, message_id: int, image_data_url: str | None):
+        if not image_data_url:
+            return None
+        return save_message_image(db, conversation_id, message_id, image_data_url)
 
     # ──────────────────────────────────────────────────────────
     # 工具调用：解析 + 执行
     # ──────────────────────────────────────────────────────────
 
-    def _parse_tool_call(self, llm_response: str) -> str | None:
+    def _parse_tool_call(self, llm_response: str) -> dict | None:
         """
         检测 LLM 回复中是否包含工具调用指令。
-        返回 query 字符串，没有工具调用则返回 None。
+        返回工具名和 query，没有工具调用则返回 None。
 
         支持的格式：
           [TOOL_CALL:search_memory:query=关键词]
         """
-        pattern = r'\[TOOL_CALL:search_memory:query=(.+?)\]'
+        pattern = r'\[TOOL_CALL:(search_memory):query=(.+?)\]'
         match   = re.search(pattern, llm_response, re.DOTALL)
         if match:
-            return match.group(1).strip()
+            return {
+                "name": match.group(1).strip(),
+                "query": match.group(2).strip(),
+            }
         return None
+
+    def _execute_tool_call(self, tool_call: dict) -> str:
+        tool_name = tool_call.get("name")
+        query = tool_call.get("query", "")
+        if tool_name == "search_memory":
+            return self._execute_search_memory(query)
+        if tool_name == "search_news":
+            return self._execute_search_news(query)
+        return "工具暂时不可用。"
 
     def _execute_search_memory(self, query: str) -> str:
         """
@@ -350,13 +397,44 @@ class CompanionAgent:
         调用 RAG 检索，返回格式化的历史片段文字。
         """
         try:
-            results = self.rag.search(query, top_k=3)
+            results = self.rag.search(query, top_k=5)
             if not results:
                 return "未找到与该话题相关的历史记忆。"
             return self.rag.format_for_prompt(results)
         except Exception as e:
             print(f"  ⚠️  search_memory 执行失败: {e}")
             return "记忆检索暂时不可用。"
+
+    def _execute_search_news(self, query: str) -> str:
+        """执行 search_news 工具，返回含真实链接的新闻结果。"""
+        try:
+            service = get_brave_mcp_service()
+            results = service.search_news(query, count=5)
+            return service.format_for_prompt(results)
+        except Exception as e:
+            print(f"  ⚠️  search_news 执行失败: {e}")
+            return "新闻搜索暂时不可用，可能是 Brave MCP 服务未启动或网络不可用。"
+
+    def _tool_followup_prompt(self, tool_call: dict, tool_result: str) -> str:
+        tool_name = tool_call.get("name")
+        if tool_name == "search_news":
+            return (
+                f"[工具返回结果]\n{tool_result}\n\n"
+                "请基于以上新闻搜索结果，结合用户刚才的问题自然回复。\n"
+                "要求：\n"
+                "· 只能引用工具结果中的新闻事实、来源和链接，不要编造新闻或URL\n"
+                "· 尽量附上1-3个工具结果里真实存在的链接\n"
+                "· 如果结果不足以回答，要直接说明搜索结果有限\n"
+                "· 保持聊天口吻，不要写成长篇新闻报告"
+            )
+        return (
+            f"[工具返回结果]\n{tool_result}\n\n"
+            "请基于以上记忆背景，结合用户刚才说的话，给出你的回复。\n"
+            "要求：\n"
+            "· 记忆只是背景参考，不要逐条复述\n"
+            "· 回复要自然、温暖，像一个真正认识用户的朋友\n"
+            "· 如果检索结果与当前话题关联不强，可以忽略它"
+        )
 
     # ──────────────────────────────────────────────────────────
     # LLM 调用工具方法

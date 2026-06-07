@@ -90,6 +90,23 @@ def generate_mood_summary(db: Session, target_date: str = None) -> MoodEntryOut:
     # ── 步骤 5：返回 MoodEntryOut ────────────────────────────
     return _to_schema(mood_entry)
 
+def _calculate_score(features: dict) -> int:
+    score = 6
+
+    score += features.get("joy", 0) * 0.35
+    score += features.get("energy", 0) * 0.2
+    score += features.get("valence", 0) * 0.7
+
+    score -= features.get("stress", 0) * 0.3
+    score -= features.get("sadness", 0) * 0.35
+    score -= features.get("anxiety", 0) * 0.3
+    score -= features.get("anger", 0) * 0.2
+
+    if features.get("risk_level") in ["medium", "high"]:
+        score = min(score, 4)
+
+    return max(1, min(10, round(score)))
+
 
 def _analyze_mood(user_messages: list[dict], target_date: str) -> dict:
     """
@@ -109,33 +126,32 @@ def _analyze_mood(user_messages: list[dict], target_date: str) -> dict:
         f"用户说：{m['content']}" for m in user_messages
     ])
 
-    prompt = f"""请分析以下用户今日（{target_date}）在情绪陪伴应用中的对话内容，生成心情小记。
+    prompt = f"""请分析以下用户今日（{target_date}）在情绪陪伴应用中的对话内容。
 
-用户今日说的话：
-{dialogue}
+    用户今日说的话：
+    {dialogue}
 
-请严格按照以下 JSON 格式返回，不要添加任何额外文字和 markdown 标记：
-{{
-  "score": 7,
-  "keywords": ["关键词1", "关键词2", "关键词3"],
-  "summary": "今日心情总结文字，100-200字，温暖自然的语气，用第二人称'你'描述用户的情绪状态"
-}}
+    请严格返回 JSON，不要添加任何额外文字：
+    {{
+      "valence": 0,
+      "joy": 0,
+      "energy": 0,
+      "stress": 0,
+      "sadness": 0,
+      "anxiety": 0,
+      "anger": 0,
+      "risk_level": "low",
+      "keywords": ["关键词1", "关键词2", "关键词3"],
+      "summary": "今日心情总结文字，100-200字"
+    }}
 
-评分标准（score 为 1-10 的整数）：
-  1-2：极度低落、崩溃、绝望
-  3-4：情绪低迷、焦虑、难过
-  5-6：平稳、一般、有些波动
-  7-8：较好、愉快、满足
-  9-10：非常开心、兴奋、幸福
-
-keywords 要求：
-  - 3-5 个词，提取今日情绪的核心标签
-  - 用简短的词或短语，例如："工作压力"、"开心满足"、"有些焦虑"
-
-summary 要求：
-  - 温暖自然，像朋友写给你的总结
-  - 提到今天的具体情绪事件
-  - 结尾可以有一句鼓励或关怀的话"""
+    字段说明：
+    - valence：整体情绪倾向，范围 -5 到 5，负数代表消极，正数代表积极
+    - joy、energy、stress、sadness、anxiety、anger：范围 0 到 10
+    - risk_level：只能是 low、medium、high
+    - keywords：3-5 个中文短词
+    - summary：温暖自然，用第二人称“你”描述用户状态
+    """
 
     try:
         response = llm.invoke([{"role": "user", "content": prompt}])
@@ -155,8 +171,19 @@ summary 要求：
         data = json.loads(text)
 
         # 校验字段完整性
-        score    = int(data.get("score", 5))
-        score    = max(1, min(10, score))   # 限制在 1-10 范围内
+        features = {
+            "valence": int(data.get("valence", 0)),
+            "joy": int(data.get("joy", 0)),
+            "energy": int(data.get("energy", 0)),
+            "stress": int(data.get("stress", 0)),
+            "sadness": int(data.get("sadness", 0)),
+            "anxiety": int(data.get("anxiety", 0)),
+            "anger": int(data.get("anger", 0)),
+            "risk_level": data.get("risk_level", "low")
+        }
+
+        score = _calculate_score(features)
+
         keywords = data.get("keywords", [])
         summary  = data.get("summary", "")
 
@@ -165,7 +192,12 @@ summary 要求：
         if not summary:
             summary = "今天的心情已记录。"
 
-        return {"score": score, "keywords": keywords, "summary": summary}
+        return {
+            "score": score,
+            "keywords": keywords,
+            "summary": summary
+        }
+
 
     except json.JSONDecodeError as e:
         print(f"  ⚠️  LLM 返回格式解析失败: {e}，使用默认值")
@@ -205,7 +237,7 @@ def _upsert_mood_entry(
         existing.summary_text     = analysis["summary"]
         existing.keywords         = json.dumps(analysis["keywords"], ensure_ascii=False)
         existing.conversation_ids = json.dumps(conversation_ids)
-        existing.updated_at       = datetime.utcnow()
+        existing.updated_at       = datetime.now()
         db.commit()
         db.refresh(existing)
         return existing
@@ -217,7 +249,7 @@ def _upsert_mood_entry(
             summary_text=analysis["summary"],
             keywords=json.dumps(analysis["keywords"], ensure_ascii=False),
             conversation_ids=json.dumps(conversation_ids),
-            updated_at=datetime.utcnow()
+            updated_at=datetime.now()
         )
         db.add(entry)
         db.commit()

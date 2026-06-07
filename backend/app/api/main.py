@@ -1,10 +1,12 @@
 # backend/app/api/main.py
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from ..config import get_settings, print_config
 from ..database import init_db
 from ..api.routes import chat, mood, memory, weather, news
+from ..services.image_service import UPLOAD_ROOT
 
 settings = get_settings()
 
@@ -30,6 +32,9 @@ app.include_router(mood.router,    prefix="/api")
 app.include_router(memory.router,  prefix="/api")
 app.include_router(weather.router, prefix="/api")
 app.include_router(news.router,    prefix="/api")
+
+UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads/images", StaticFiles(directory=str(UPLOAD_ROOT)), name="uploaded-images")
 
 @app.on_event("startup")
 async def startup_event():

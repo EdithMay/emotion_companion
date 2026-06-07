@@ -45,12 +45,7 @@ def get_latest_summary(db: Session, conversation_id: int) -> str:
     获取最新一条记忆摘要文本。
     若无摘要返回空字符串，供 companion_agent.py 注入 prompt。
     """
-    summary = (
-        db.query(MemorySummary)
-        .filter(MemorySummary.conversation_id == conversation_id)
-        .order_by(MemorySummary.created_at.desc())
-        .first()
-    )
+    summary = _get_latest_summary_record(db, conversation_id)
     return summary.summary_text if summary else ""
 
 
@@ -69,14 +64,14 @@ def save_message(db: Session, conversation_id: int, role: str, content: str) -> 
 
 def check_and_compress(db: Session, conversation_id: int) -> bool:
     """
-    检查消息数量，超过阈值则自动压缩最早一批消息为摘要。
+    检查消息数量，超过阈值则为较早消息生成摘要。
 
     压缩流程：
       1. 查询该会话全部消息
       2. 消息数 > COMPRESS_THRESHOLD（20条）才触发
       3. 取最早的 COMPRESS_BATCH（15条）调 LLM 压缩
       4. 摘要存入 memory_summaries
-      5. 删除这 15 条原始消息
+      5. 原始消息不删除，仍用于历史记录展示和图片关联
       6. 返回 True 表示发生了压缩，False 表示未触发
 
     注意：压缩后同步写入 ChromaDB 的逻辑在 rag_service 完成后
@@ -87,27 +82,42 @@ def check_and_compress(db: Session, conversation_id: int) -> bool:
     if len(messages) <= COMPRESS_THRESHOLD:
         return False
 
-    print(f"  🗜️  消息数 {len(messages)} 超过阈值 {COMPRESS_THRESHOLD}，开始压缩...")
+    latest_summary = _get_latest_summary_record(db, conversation_id)
+    summarized_count = latest_summary.message_count if latest_summary else 0
+    if summarized_count >= len(messages):
+        return False
 
-    to_compress = messages[:COMPRESS_BATCH]
+    unsummarized_count = len(messages) - summarized_count
+    if latest_summary and unsummarized_count < COMPRESS_BATCH:
+        return False
+
+    print(f"  记忆压缩: 消息数 {len(messages)} 超过阈值 {COMPRESS_THRESHOLD}，开始生成摘要...")
+
+    end_index = min(summarized_count + COMPRESS_BATCH, len(messages))
+    to_compress = messages[:end_index]
     summary_text = _compress_messages(to_compress)
 
     # 存摘要
     summary = MemorySummary(
         conversation_id=conversation_id,
         summary_text=summary_text,
-        message_count=len(to_compress)
+        message_count=end_index
     )
     db.add(summary)
 
-    # 删除已压缩的原始消息
-    for msg in to_compress:
-        db.delete(msg)
-
     db.commit()
 
-    print(f"  ✅ 压缩完成：{len(to_compress)} 条消息 → 1 条摘要")
+    print(f"  记忆压缩完成: 已为 {len(to_compress)} 条消息生成摘要，原始消息已保留")
     return True
+
+
+def _get_latest_summary_record(db: Session, conversation_id: int) -> MemorySummary | None:
+    return (
+        db.query(MemorySummary)
+        .filter(MemorySummary.conversation_id == conversation_id)
+        .order_by(MemorySummary.created_at.desc())
+        .first()
+    )
 
 
 def _compress_messages(messages: list[Message]) -> str:
